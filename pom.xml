@@ -24,7 +24,7 @@
     </parent>
 
     <artifactId>kafka-connect-hdfs</artifactId>
-    <version>10.2.2-quantcast</version>
+    <version>10.2.16-quantcast</version>
     <packaging>jar</packaging>
     <name>kafka-connect-hdfs</name>
     <organization>
