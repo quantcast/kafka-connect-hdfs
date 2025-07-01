@@ -15,6 +15,9 @@
 
 package io.confluent.connect.hdfs;
 
+import com.google.re2j.Matcher;
+import com.google.re2j.Pattern;
+import com.google.re2j.PatternSyntaxException;
 import static io.confluent.connect.hdfs.HdfsSinkConnector.TASK_ID_CONFIG_NAME;
 import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_CONFIG;
 import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_DISPLAY;
@@ -26,10 +29,21 @@ import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR
 import static io.confluent.connect.storage.hive.HiveConfig.HIVE_DATABASE_CONFIG;
 import static io.confluent.connect.storage.hive.HiveConfig.HIVE_INTEGRATION_CONFIG;
 
+import io.confluent.connect.hdfs.parquet.ParquetFormat;
+import io.confluent.connect.hdfs.string.StringFormat;
+import org.apache.commons.lang.StringUtils;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.kafka.common.config.AbstractConfig;
+import org.apache.kafka.common.config.ConfigDef;
+import org.apache.kafka.common.config.ConfigDef.Importance;
+import org.apache.kafka.common.config.ConfigDef.Type;
+import org.apache.kafka.common.config.ConfigDef.Width;
+import org.apache.kafka.common.config.ConfigException;
+
+import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
@@ -39,16 +53,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 
 import io.confluent.connect.hdfs.avro.AvroFormat;
 import io.confluent.connect.hdfs.json.JsonFormat;
 import io.confluent.connect.hdfs.orc.OrcFormat;
-import io.confluent.connect.hdfs.parquet.ParquetFormat;
 import io.confluent.connect.hdfs.storage.HdfsStorage;
-import io.confluent.connect.hdfs.string.StringFormat;
 import io.confluent.connect.hdfs.wal.WalType;
 import io.confluent.connect.storage.StorageSinkConnectorConfig;
 import io.confluent.connect.storage.common.ComposableConfig;
@@ -62,14 +71,6 @@ import io.confluent.connect.storage.partitioner.FieldPartitioner;
 import io.confluent.connect.storage.partitioner.HourlyPartitioner;
 import io.confluent.connect.storage.partitioner.PartitionerConfig;
 import io.confluent.connect.storage.partitioner.TimeBasedPartitioner;
-import org.apache.commons.lang.StringUtils;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.kafka.common.config.AbstractConfig;
-import org.apache.kafka.common.config.ConfigDef;
-import org.apache.kafka.common.config.ConfigDef.Importance;
-import org.apache.kafka.common.config.ConfigDef.Type;
-import org.apache.kafka.common.config.ConfigDef.Width;
-import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.utils.Utils;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 
@@ -185,7 +186,7 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
   private static final GenericRecommender PARTITIONER_CLASS_RECOMMENDER = new GenericRecommender();
   private static final ParentValueRecommender AVRO_COMPRESSION_RECOMMENDER
       = new ParentValueRecommender(FORMAT_CLASS_CONFIG, AvroFormat.class, AVRO_SUPPORTED_CODECS);
-  private static final ParquetCodecRecommender PARQUET_COMPRESSION_RECOMMENDER 
+  private static final ParquetCodecRecommender PARQUET_COMPRESSION_RECOMMENDER
       = new ParquetCodecRecommender();
   public static final String WRITE_FAILURE_TOLERANCE_CONFIG = "write.failure.tolerance";
   private static final Integer WRITE_FAILURE_TOLERANCE_DEFAULT = 10;
@@ -402,7 +403,7 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
 
     final String connectorGroup = "Connector";
     final int latestOrderInGroup = configDef.configKeys().values().stream()
-            .filter(c -> connectorGroup.equalsIgnoreCase(c.group)) 
+            .filter(c -> connectorGroup.equalsIgnoreCase(c.group))
             .map(c -> c.orderInGroup)
            .max(Integer::compare).orElse(0);
 
@@ -474,10 +475,14 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
     this.url = extractUrl();
     try {
       String topicRegex = getString(TOPIC_CAPTURE_GROUPS_REGEX_CONFIG);
-      this.topicRegexCaptureGroup = topicRegex != null ? Pattern.compile(topicRegex) : null;
+      if (topicRegex != null) {
+        this.topicRegexCaptureGroup = Pattern.compile(topicRegex);
+      } else {
+        this.topicRegexCaptureGroup = null;
+      }
     } catch (PatternSyntaxException e) {
       throw new ConfigException(
-          TOPIC_CAPTURE_GROUPS_REGEX_CONFIG + " is an invalid regex pattern: ",
+          TOPIC_CAPTURE_GROUPS_REGEX_CONFIG + " is an invalid regex pattern: " + e.getMessage(),
           e
       );
     }
