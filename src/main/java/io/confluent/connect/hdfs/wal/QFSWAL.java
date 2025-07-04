@@ -131,9 +131,10 @@ public class QFSWAL implements WAL {
 
     // It gives two chance of grabbing the lock on startup.
     // This should help when the new task comes up sooner than the expiry of the previous lock.
+    // Wait for lockTimeout + lockRefreshInterval to give enough time to release the lock
     if (!findAliveLocks().isEmpty()) {
       try {
-        Thread.sleep(this.lockTimeout.toMillis());
+        Thread.sleep(this.lockTimeout.toMillis() + this.lockRefreshInterval.toMillis());
       } catch (InterruptedException e) {
         throw new RuntimeException(e);
       }

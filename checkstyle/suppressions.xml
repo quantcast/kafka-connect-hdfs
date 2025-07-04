@@ -13,6 +13,11 @@
     />
 
     <suppress
+            checks="MethodLength"
+            files="TopicPartitionWriter.java"
+    />
+
+    <suppress
             checks="ClassDataAbstractionCoupling"
             files="(DataWriter|WALFile|OrcUtil).java"
     />

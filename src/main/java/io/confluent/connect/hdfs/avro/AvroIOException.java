@@ -13,19 +13,14 @@
  * specific language governing permissions and limitations under the License.
  */
 
-package io.confluent.connect.hdfs.filter;
 
-import io.confluent.connect.hdfs.HdfsSinkConnectorConstants;
+package io.confluent.connect.hdfs.avro;
 
-import com.google.re2j.Matcher;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.PathFilter;
+import java.io.IOException;
 
-public class CommittedFileFilter implements PathFilter {
-  @Override
-  public boolean accept(Path path) {
-    String filename = path.getName();
-    Matcher m = HdfsSinkConnectorConstants.COMMITTED_FILENAME_PATTERN.matcher(filename);
-    return m.matches();
+@SuppressWarnings("serial")
+public class AvroIOException extends RuntimeException {
+  public AvroIOException(IOException e) {
+    super(e);
   }
 }
