@@ -104,7 +104,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
 
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     //create a few empty blocks
     wal.append(WAL.beginMarker, "");
     wal.append(WAL.endMarker, "");
@@ -128,7 +128,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
     // test missing end marker on middle block
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
 
     wal.append(WAL.beginMarker, "");
     addSampleEntriesToWALNoMarkers(topicsDir.get(TOPIC_PARTITION.topic()), wal, 5);
@@ -147,7 +147,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
     // test missing end marker on middle block
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     //create a few empty blocks
     wal.append(WAL.beginMarker, "");
     wal.append(WAL.endMarker, "");
@@ -172,7 +172,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
     // test missing end marker on middle block
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     wal.append(WAL.beginMarker, "");
 
     String tempfile = FileUtils.tempFileName(url, topicsDir.get(TOPIC_PARTITION.topic()), getDirectory(), extension);
@@ -198,7 +198,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
     // test missing end marker on middle block
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     wal.append(WAL.beginMarker, "");
     wal.append(WAL.endMarker, "");
     wal.append(WAL.beginMarker, "");
@@ -211,7 +211,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
   public void testNoOffsetsFromWALWithMissingBeginMarkerFirstBlock() throws Exception {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
 
     //test missing begin marker
     addSampleEntriesToWALNoMarkers(topicsDir.get(TOPIC_PARTITION.topic()), wal, 5);
@@ -224,7 +224,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
   public void testNoOffsetsFromWALWithMissingBeginMarkerMiddleBlock() throws Exception {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
 
     wal.append(WAL.beginMarker, "");
     wal.append(WAL.endMarker, "");
@@ -245,7 +245,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
   public void testNoOffsetsFromWALWithMissingBeginMarkerLastBlock() throws Exception {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
 
     wal.append(WAL.beginMarker, "");
     wal.append(WAL.endMarker, "");
@@ -262,7 +262,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
   public void testOffsetsExtractedFromWAL() throws Exception {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     addSampleEntriesToWAL(topicsDir.get(TOPIC_PARTITION.topic()), wal, 5);
 
     long latestOffset = wal.extractLatestOffset().getOffset();
@@ -273,7 +273,7 @@ public class FSWALTest extends TestWithMiniDFSCluster {
   public void testOffsetsExtractedFromOldWAL() throws Exception {
     setupWalTest();
     HdfsStorage storage = new HdfsStorage(connectorConfig, url);
-    FSWAL wal = (FSWAL) storage.wal(logsDir, TOPIC_PARTITION);
+    FSWAL wal = (FSWAL) storage.hdfsWAL(logsDir, TOPIC_PARTITION);
     addSampleEntriesToWAL(topicsDir.get(TOPIC_PARTITION.topic()), wal, 5);
     //creates old WAL and empties new one
     wal.truncate();

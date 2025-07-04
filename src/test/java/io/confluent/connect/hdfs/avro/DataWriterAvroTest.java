@@ -96,7 +96,7 @@ public class DataWriterAvroTest extends TestWithMiniDFSCluster {
     DataWriter hdfsWriter = new DataWriter(connectorConfig, context, avroData);
     partitioner = hdfsWriter.getPartitioner();
 
-    WAL wal = storage.wal(logsDir, TOPIC_PARTITION);
+    WAL wal = storage.hdfsWAL(logsDir, TOPIC_PARTITION);
 
     wal.append(WAL.beginMarker, "");
 

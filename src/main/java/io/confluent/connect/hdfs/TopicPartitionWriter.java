@@ -15,6 +15,8 @@
 
 package io.confluent.connect.hdfs;
 
+import io.confluent.connect.hdfs.wal.WalType;
+import io.confluent.connect.storage.format.RecordWriter;
 import io.confluent.connect.hdfs.avro.AvroIOException;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
@@ -89,6 +91,10 @@ public class TopicPartitionWriter {
   private Long lastRotate;
   private final long rotateScheduleIntervalMs;
   private long nextScheduledRotate;
+
+  private final long maxFileSizeRotationBytes;
+  private MaxFileSizeRotator maxFilesizeRotator;
+
   // This is one case where we cannot simply wrap the old or new RecordWriterProvider with the
   // other because they have incompatible requirements for some methods -- one requires the Hadoop
   // config + extra parameters, the other requires the ConnectorConfig and doesn't get the other
@@ -103,6 +109,8 @@ public class TopicPartitionWriter {
   private final Map<String, Long> endOffsets;
   private final long timeoutMs;
   private long failureTime;
+  private int failureCount;
+  private int failureTolerance;
   private final StorageSchemaCompatibility compatibility;
   private Schema currentSchema;
   private final String extension;
@@ -197,12 +205,18 @@ public class TopicPartitionWriter {
     rotateIntervalMs = config.getLong(HdfsSinkConnectorConfig.ROTATE_INTERVAL_MS_CONFIG);
     rotateScheduleIntervalMs = config.getLong(HdfsSinkConnectorConfig
         .ROTATE_SCHEDULE_INTERVAL_MS_CONFIG);
+    maxFileSizeRotationBytes = config.getLong(HdfsSinkConnectorConfig
+        .ROTATE_MAX_FILE_SIZE_BYTES_CONFIG);
     timeoutMs = config.getLong(HdfsSinkConnectorConfig.RETRY_BACKOFF_CONFIG);
+    failureTolerance = config.getInt(HdfsSinkConnectorConfig.WRITE_FAILURE_TOLERANCE_CONFIG);
     compatibility = StorageSchemaCompatibility.getCompatibility(
         config.getString(StorageSinkConnectorConfig.SCHEMA_COMPATIBILITY_CONFIG));
 
     String logsDir = config.getLogsDirFromTopic(tp.topic());
-    wal = storage.wal(logsDir, tp);
+
+    wal = WalType.valueOf(
+            config.getString(HdfsSinkConnectorConfig.WAL_TYPE)
+    ).create(logsDir, tp, storage);
 
     buffer = new LinkedList<>();
     writers = new HashMap<>();
@@ -212,6 +226,7 @@ public class TopicPartitionWriter {
     endOffsets = new HashMap<>();
     state = State.RECOVERY_STARTED;
     failureTime = -1L;
+    failureCount = 0;
     // The next offset to consume after the last commit (one more than last offset written to HDFS)
     offset = -1L;
     if (writerProvider != null) {
@@ -340,6 +355,8 @@ public class TopicPartitionWriter {
         );
       }
     }
+
+    maxFilesizeRotator = new MaxFileSizeRotator(maxFileSizeRotationBytes);
   }
 
   private void resetAndSetRecovery() {
@@ -355,6 +372,11 @@ public class TopicPartitionWriter {
     SinkRecord currentRecord = null;
     if (failureTime > 0 && now - failureTime < timeoutMs) {
       return;
+    }
+    if (failureCount > failureTolerance) {
+      log.error("The writer has failed {} times consecutively.", failureCount);
+      // Kill the task as it has been failing more than the max retries
+      throw new ConnectException("The task has exceeded the failure tolerance.");
     }
     if (state.compareTo(State.WRITE_STARTED) < 0) {
       boolean success = recover();
@@ -441,13 +463,14 @@ public class TopicPartitionWriter {
       } catch (AvroIOException | ConnectException e) {
         log.error("Exception on topic partition {}: ", tp, e);
         failureTime = time.milliseconds();
+        failureCount += 1;
         setRetryTimeout(timeoutMs);
         if (e instanceof AvroIOException) {
           log.error("Encountered AVRO IO exception, resetting this topic partition {} "
                   + "to offset {}", tp, offset);
           resetAndSetRecovery();
         }
-        break;
+        return;
       }
     }
     if (buffer.isEmpty()) {
@@ -486,6 +509,7 @@ public class TopicPartitionWriter {
       } catch (AvroIOException | ConnectException e) {
         log.error("Exception on topic partition {}: ", tp, e);
         failureTime = time.milliseconds();
+        failureCount += 1;
         setRetryTimeout(timeoutMs);
         if (e instanceof AvroIOException) {
           log.error("Encountered AVRO IO exception, resetting this topic partition {} "
@@ -498,6 +522,7 @@ public class TopicPartitionWriter {
       resume();
       state = State.WRITE_STARTED;
     }
+    this.failureCount = 0;
   }
 
   public void close() throws ConnectException {
@@ -613,7 +638,7 @@ public class TopicPartitionWriter {
         && lastRotate != null
         && currentTimestamp - lastRotate >= rotateIntervalMs;
     boolean scheduledRotation = rotateScheduleIntervalMs > 0 && now >= nextScheduledRotate;
-    boolean messageSizeRotation = recordCounter >= flushSize;
+    boolean messageCountRotation = flushSize > 0 && recordCounter >= flushSize;
 
     log.trace(
         "Should apply periodic time-based rotation (rotateIntervalMs: '{}', lastRotate: "
@@ -637,10 +662,22 @@ public class TopicPartitionWriter {
         "Should apply size-based rotation (count {} >= flush size {})? {}",
         recordCounter,
         flushSize,
-        messageSizeRotation
+        messageCountRotation
     );
 
-    return periodicRotation || scheduledRotation || messageSizeRotation;
+
+    boolean fileSizeRotation = needsFileSizeRotation(currentRecord);
+
+    return periodicRotation || scheduledRotation || messageCountRotation || fileSizeRotation;
+  }
+
+  private boolean needsFileSizeRotation(SinkRecord currentRecord) {
+    if (currentRecord == null) {
+      return false;
+    }
+    String partitionEncoding = partitioner.encodePartition(currentRecord);
+    RecordWriter writer = getWriter(currentRecord, partitionEncoding);
+    return maxFilesizeRotator.checkMaxFileSizeReached(writer, recordCounter);
   }
 
   /**

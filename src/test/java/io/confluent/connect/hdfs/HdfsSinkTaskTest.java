@@ -370,7 +370,7 @@ public class HdfsSinkTaskTest extends TestWithMiniDFSCluster {
     );
 
     for (TopicPartition tp: tempfiles.keySet()) {
-      WAL wal = storage.wal(logsDir, tp);
+      WAL wal = storage.hdfsWAL(logsDir, tp);
       List<String> tempList = tempfiles.get(tp);
       List<String> committedList = committedFiles.get(tp);
       wal.append(WAL.beginMarker, "");

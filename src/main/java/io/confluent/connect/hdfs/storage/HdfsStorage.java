@@ -15,6 +15,8 @@
 
 package io.confluent.connect.hdfs.storage;
 
+import io.confluent.connect.hdfs.wal.FSWAL;
+import io.confluent.connect.hdfs.wal.QFSWAL;
 import org.apache.avro.file.SeekableInput;
 import org.apache.avro.mapred.FsInput;
 import org.apache.hadoop.fs.FileStatus;
@@ -31,7 +33,6 @@ import java.util.Arrays;
 import java.util.List;
 
 import io.confluent.connect.hdfs.HdfsSinkConnectorConfig;
-import io.confluent.connect.hdfs.wal.FSWAL;
 import io.confluent.connect.hdfs.wal.WAL;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -177,7 +178,11 @@ public class HdfsStorage
     }
   }
 
-  public WAL wal(String topicsDir, TopicPartition topicPart) {
+  public WAL qfsWAL(String topicsDir, TopicPartition topicPart) {
+    return new QFSWAL(topicsDir, topicPart, this);
+  }
+
+  public WAL hdfsWAL(String topicsDir, TopicPartition topicPart) {
     return new FSWAL(topicsDir, topicPart, this);
   }
 

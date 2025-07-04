@@ -18,9 +18,17 @@ package io.confluent.connect.hdfs;
 import com.google.re2j.Matcher;
 import com.google.re2j.Pattern;
 import com.google.re2j.PatternSyntaxException;
-import io.confluent.connect.hdfs.orc.OrcFormat;
-import java.util.ArrayList;
-import java.util.Collections;
+import static io.confluent.connect.hdfs.HdfsSinkConnector.TASK_ID_CONFIG_NAME;
+import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_CONFIG;
+import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_DISPLAY;
+import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_DOC;
+import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_CONFIG;
+import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DEFAULT;
+import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DISPLAY;
+import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DOC;
+import static io.confluent.connect.storage.hive.HiveConfig.HIVE_DATABASE_CONFIG;
+import static io.confluent.connect.storage.hive.HiveConfig.HIVE_INTEGRATION_CONFIG;
+
 import io.confluent.connect.hdfs.parquet.ParquetFormat;
 import io.confluent.connect.hdfs.string.StringFormat;
 import org.apache.commons.lang.StringUtils;
@@ -32,19 +40,25 @@ import org.apache.kafka.common.config.ConfigDef.Type;
 import org.apache.kafka.common.config.ConfigDef.Width;
 import org.apache.kafka.common.config.ConfigException;
 
-import java.util.Arrays;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import io.confluent.connect.hdfs.avro.AvroFormat;
 import io.confluent.connect.hdfs.json.JsonFormat;
+import io.confluent.connect.hdfs.orc.OrcFormat;
 import io.confluent.connect.hdfs.storage.HdfsStorage;
+import io.confluent.connect.hdfs.wal.WalType;
 import io.confluent.connect.storage.StorageSinkConnectorConfig;
 import io.confluent.connect.storage.common.ComposableConfig;
 import io.confluent.connect.storage.common.GenericRecommender;
@@ -57,19 +71,16 @@ import io.confluent.connect.storage.partitioner.FieldPartitioner;
 import io.confluent.connect.storage.partitioner.HourlyPartitioner;
 import io.confluent.connect.storage.partitioner.PartitionerConfig;
 import io.confluent.connect.storage.partitioner.TimeBasedPartitioner;
-
-import static io.confluent.connect.hdfs.HdfsSinkConnector.TASK_ID_CONFIG_NAME;
-import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_CONFIG;
-import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_DISPLAY;
-import static io.confluent.connect.storage.common.StorageCommonConfig.STORAGE_CLASS_DOC;
-import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_CONFIG;
-import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DEFAULT;
-import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DISPLAY;
-import static io.confluent.connect.storage.common.StorageCommonConfig.TOPICS_DIR_DOC;
-import static io.confluent.connect.storage.hive.HiveConfig.HIVE_DATABASE_CONFIG;
-import static io.confluent.connect.storage.hive.HiveConfig.HIVE_INTEGRATION_CONFIG;
+import org.apache.kafka.common.utils.Utils;
+import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 
 public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
+
+  public static final String ROTATE_MAX_FILE_SIZE_BYTES_CONFIG = "rotate.max.bytes";
+  private static final String ROTATE_MAX_FILE_SIZE_BYTES_DOC = "Rotate file before hitting the "
+      + "max file size. But getting as close as reasonably possible.";
+  private static final String ROTATE_MAX_FILE_SIZE_BYTES_DISPLAY = "Rotate Max Bytes";
+  private static final long ROTATE_MAX_FILE_SIZE_BYTES_DEFAULT = -1;
 
   private static final String TOPIC_SUBSTITUTION = "${topic}";
 
@@ -157,6 +168,12 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
   private static final String KERBEROS_TICKET_RENEW_PERIOD_MS_DISPLAY = "Kerberos Ticket Renew "
       + "Period (ms)";
 
+  public static final String WAL_TYPE = "wal.type";
+
+  private static final String DISABLE_WAL_DOC = "Disable WAL from being used to track the "
+      + " committed files - can be used for testing the fallback methods";
+  private static final String DISABLE_WAL_DISPLAY = "Disable WAL";
+
   private static final Pattern SUBSTITUTION_PATTERN = Pattern.compile("\\$\\{(\\d+)}");
   private static final Pattern INVALID_SUB_PATTERN = Pattern.compile("\\$\\{.*}");
 
@@ -169,6 +186,13 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
   private static final GenericRecommender PARTITIONER_CLASS_RECOMMENDER = new GenericRecommender();
   private static final ParentValueRecommender AVRO_COMPRESSION_RECOMMENDER
       = new ParentValueRecommender(FORMAT_CLASS_CONFIG, AvroFormat.class, AVRO_SUPPORTED_CODECS);
+  private static final ParquetCodecRecommender PARQUET_COMPRESSION_RECOMMENDER
+      = new ParquetCodecRecommender();
+  public static final String WRITE_FAILURE_TOLERANCE_CONFIG = "write.failure.tolerance";
+  private static final Integer WRITE_FAILURE_TOLERANCE_DEFAULT = 10;
+  private static final String WRITE_FAILURE_TOLERANCE_DOC = "The maximum number of times that the"
+          + "task is going to handle consecutive write exceptions.";
+  private static final String WRITE_FAILURE_TOLERANCE_DISPLAY = "Failure Tolerance";
 
   static {
     STORAGE_CLASS_RECOMMENDER.addValidValues(
@@ -264,6 +288,42 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
               Width.SHORT,
               HIVE_TABLE_NAME_DISPLAY
       );
+
+      configDef.define(
+          WAL_TYPE,
+          Type.STRING,
+          WalType.HDFS.name(),
+          Importance.LOW,
+          DISABLE_WAL_DOC,
+          group,
+          ++orderInGroup,
+          Width.MEDIUM,
+          DISABLE_WAL_DISPLAY
+      );
+
+      configDef.define(
+          ROTATE_MAX_FILE_SIZE_BYTES_CONFIG,
+          Type.LONG,
+          ROTATE_MAX_FILE_SIZE_BYTES_DEFAULT,
+          Importance.LOW,
+          ROTATE_MAX_FILE_SIZE_BYTES_DOC,
+          group,
+          ++orderInGroup,
+          Width.MEDIUM,
+          ROTATE_MAX_FILE_SIZE_BYTES_DISPLAY
+      );
+
+      configDef.define(
+          WRITE_FAILURE_TOLERANCE_CONFIG,
+          Type.INT,
+          WRITE_FAILURE_TOLERANCE_DEFAULT,
+          Importance.MEDIUM,
+          WRITE_FAILURE_TOLERANCE_DOC,
+          group,
+          ++orderInGroup,
+          Width.MEDIUM,
+          WRITE_FAILURE_TOLERANCE_DISPLAY
+      );
     }
 
     {
@@ -340,6 +400,19 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
           hdfsAuthenticationKerberosDependentsRecommender
       );
     }
+
+    final String connectorGroup = "Connector";
+    final int latestOrderInGroup = configDef.configKeys().values().stream()
+            .filter(c -> connectorGroup.equalsIgnoreCase(c.group))
+            .map(c -> c.orderInGroup)
+           .max(Integer::compare).orElse(0);
+
+    StorageSinkConnectorConfig.enableParquetConfig(
+            configDef,
+            PARQUET_COMPRESSION_RECOMMENDER,
+            connectorGroup,
+            latestOrderInGroup
+    );
     // Put the storage group(s) last ...
     ConfigDef storageConfigDef = StorageSinkConnectorConfig.newConfigDef(
         FORMAT_CLASS_RECOMMENDER,
@@ -530,6 +603,12 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
 
   public Configuration getHadoopConfiguration() {
     return hadoopConfig;
+  }
+
+  public CompressionCodecName parquetCompressionCodecName() {
+    return "none".equalsIgnoreCase(getString(PARQUET_CODEC_CONFIG))
+            ? CompressionCodecName.fromConf(null)
+            : CompressionCodecName.fromConf(getString(PARQUET_CODEC_CONFIG));
   }
 
   public Map<String, ?> plainValues() {
@@ -725,6 +804,41 @@ public class HdfsSinkConnectorConfig extends StorageSinkConnectorConfig {
               TOPIC_SUBSTITUTION
           )
       );
+    }
+  }
+
+  private static class ParquetCodecRecommender extends ParentValueRecommender
+          implements ConfigDef.Validator {
+    public static final Map<String, CompressionCodecName> TYPES_BY_NAME;
+    public static final List<String> ALLOWED_VALUES;
+
+    static {
+      TYPES_BY_NAME = Arrays.stream(CompressionCodecName.values())
+              .filter(c -> !CompressionCodecName.UNCOMPRESSED.equals(c))
+              .collect(Collectors.toMap(c -> c.name().toLowerCase(), Function.identity()));
+      TYPES_BY_NAME.put("none", CompressionCodecName.UNCOMPRESSED);
+      ALLOWED_VALUES = new ArrayList<>(TYPES_BY_NAME.keySet());
+      // Not a hard requirement but this call usually puts 'none' first in the list of allowed
+      // values
+      Collections.reverse(ALLOWED_VALUES);
+    }
+
+    public ParquetCodecRecommender() {
+      super(FORMAT_CLASS_CONFIG, ParquetFormat.class, ALLOWED_VALUES.toArray());
+    }
+
+    @Override
+    public void ensureValid(String name, Object compressionCodecName) {
+      String compressionCodecNameString = ((String) compressionCodecName).trim();
+      if (!TYPES_BY_NAME.containsKey(compressionCodecNameString)) {
+        throw new ConfigException(name, compressionCodecName,
+                "Value must be one of: " + ALLOWED_VALUES);
+      }
+    }
+
+    @Override
+    public String toString() {
+      return "[" + Utils.join(ALLOWED_VALUES, ", ") + "]";
     }
   }
 

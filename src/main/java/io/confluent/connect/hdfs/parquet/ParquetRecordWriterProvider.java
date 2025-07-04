@@ -15,13 +15,16 @@
 
 package io.confluent.connect.hdfs.parquet;
 
+import io.confluent.connect.hdfs.SizeAwareRecordWriter;
 import io.confluent.connect.storage.format.RecordWriter;
 import org.apache.avro.generic.GenericRecord;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.kafka.connect.data.Schema;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.sink.SinkRecord;
 import org.apache.parquet.avro.AvroParquetWriter;
+import org.apache.parquet.avro.AvroWriteSupport;
 import org.apache.parquet.hadoop.ParquetFileWriter;
 import org.apache.parquet.hadoop.ParquetWriter;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
@@ -50,8 +53,16 @@ public class ParquetRecordWriterProvider
 
   @Override
   public RecordWriter getRecordWriter(HdfsSinkConnectorConfig conf, String filename) {
-    return new RecordWriter() {
-      final CompressionCodecName compressionCodecName = CompressionCodecName.SNAPPY;
+    return new SizeAwareRecordWriter() {
+      @Override
+      public long getDataSize() {
+        if (writer == null) {
+          return 0;
+        }
+        return writer.getDataSize();
+      }
+
+      final CompressionCodecName compressionCodecName = conf.parquetCompressionCodecName();
       final int blockSize = 256 * 1024 * 1024;
       final int pageSize = 64 * 1024;
       Path path = new Path(filename);
@@ -69,13 +80,15 @@ public class ParquetRecordWriterProvider
           try {
             log.info("Opening record writer for: {}", filename);
             org.apache.avro.Schema avroSchema = avroData.fromConnectSchema(schema);
+            Configuration avroConfig = conf.getHadoopConfiguration();
+            avroConfig.setBoolean(AvroWriteSupport.WRITE_OLD_LIST_STRUCTURE, false);
             writer = AvroParquetWriter.<GenericRecord>builder(path)
                 .withSchema(avroSchema)
                 .withCompressionCodec(compressionCodecName)
                 .withRowGroupSize(blockSize)
                 .withPageSize(pageSize)
                 .withDictionaryEncoding(true)
-                .withConf(conf.getHadoopConfiguration())
+                .withConf(avroConfig)
                 .withWriteMode(ParquetFileWriter.Mode.OVERWRITE)
                 .build();
             log.debug("Opened record writer for: {}", filename);
@@ -100,6 +113,13 @@ public class ParquetRecordWriterProvider
         } catch (IOException e) {
           throw new ConnectException(e);
         }
+      }
+
+      public long size() {
+        if (writer == null) {
+          return 0;
+        }
+        return writer.getDataSize();
       }
 
       @Override

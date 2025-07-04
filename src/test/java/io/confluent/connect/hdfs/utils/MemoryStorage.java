@@ -148,7 +148,12 @@ public class MemoryStorage extends HdfsStorage {
   }
 
   @Override
-  public WAL wal(String topicsDir, TopicPartition topicPart) {
+  public WAL qfsWAL(String topicsDir, TopicPartition topicPart) {
+    return new MemoryWAL(topicsDir, topicPart, this);
+  }
+
+  @Override
+  public WAL hdfsWAL(String topicsDir, TopicPartition topicPart) {
     return new MemoryWAL(topicsDir, topicPart, this);
   }
 
